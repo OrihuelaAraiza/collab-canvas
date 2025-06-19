@@ -1,0 +1,26 @@
+/* client/src/components/Canvas.module.css */
+.wrapper {
+  position: relative;   /* enable absolute children */
+  width: 100%;
+  height: calc(100vh - 4rem); /* full height minus header */
+  border: 1px solid #ccc;
+  touch-action: none; /* prevent scrolling on touch */
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #fff;
+  cursor: crosshair;
+}
+
+/* Styles for remote cursor dots */
+.remote-cursor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 2px rgba(0,0,0,0.3);
+} 
