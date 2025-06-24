@@ -2,25 +2,56 @@
 .wrapper {
   position: relative;   /* enable absolute children */
   width: 100%;
-  height: calc(100vh - 4rem); /* full height minus header */
-  border: 1px solid #ccc;
-  touch-action: none; /* prevent scrolling on touch */
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.canvas,
+.previewCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: #fff;
-  cursor: crosshair;
+  background-color: #ffffff;
+  background-image: radial-gradient(circle at 1px 1px, #e0e0e0 1px, transparent 0);
+  background-size: 20px 20px;
+  z-index: 1;
+}
+
+:global(.dark) .canvas {
+  background-color: #1a1a1a;
+  background-image: radial-gradient(circle at 1px 1px, #404040 1px, transparent 0);
+}
+
+.previewCanvas {
+  z-index: 2;
+  /* Make sure preview canvas is transparent so we can see the main canvas */
+  background-color: transparent;
 }
 
 /* Styles for remote cursor dots */
 .remote-cursor {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   pointer-events: none;
-  box-shadow: 0 0 2px rgba(0,0,0,0.3);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px currentColor;
+  border: 2px solid white;
+  animation: cursorPulse 2s ease-in-out infinite;
+}
+
+:global(.dark) .remote-cursor {
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.8), 0 0 20px currentColor;
+  border: 2px solid #1a1a1a;
+}
+
+@keyframes cursorPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.8; }
 } 

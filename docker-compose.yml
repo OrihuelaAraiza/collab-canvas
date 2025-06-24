@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:latest
+    ports:
+      - '6379:6379'
+  
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - '4000:4000'
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - '3000:80'
+    depends_on:
+      - server 
