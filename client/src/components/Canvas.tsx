@@ -138,57 +138,52 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const renderObjects = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      // 1. Draw all the creative objects first
       canvasObjects.current.forEach(obj => {
-        if (obj.type === 'erase') return // Skip erase paths for now
-        ctx.globalCompositeOperation = 'source-over'
-        if (obj.type !== 'text') {
-          ctx.strokeStyle = obj.color
+        // ---- set paint mode ---------------------------------------------------
+        if (obj.type === 'erase') {
+          ctx.globalCompositeOperation = 'destination-out'
           ctx.lineWidth = obj.thickness
           ctx.lineCap = 'round'
           ctx.lineJoin = 'round'
+        } else {
+          ctx.globalCompositeOperation = 'source-over'
+          if (obj.type !== 'text') {
+            ctx.strokeStyle = obj.color
+            ctx.lineWidth  = obj.thickness
+            ctx.lineCap    = 'round'
+            ctx.lineJoin   = 'round'
+          }
         }
-        if (obj.type === 'stroke') {
-          ctx.beginPath()
-          obj.points.forEach((p, i) => {
-            if (i === 0) ctx.moveTo(p.x, p.y)
-            else ctx.lineTo(p.x, p.y)
-          })
-          ctx.stroke()
-        } else if (obj.type === 'rectangle') {
-          ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
-        } else if (obj.type === 'circle') {
-          ctx.beginPath()
-          ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
-          ctx.stroke()
-        } else if (obj.type === 'text') {
-          ctx.save()
-          ctx.font = `${obj.fontSize || 24}px sans-serif`
-          ctx.fillStyle = obj.color
-          ctx.textBaseline = 'top'
-          ctx.fillText(obj.text, obj.x, obj.y)
-          ctx.restore()
+
+        // ---- draw the object ---------------------------------------------------
+        switch (obj.type) {
+          case 'stroke':
+          case 'erase': {
+            ctx.beginPath()
+            obj.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
+            ctx.stroke()
+            break
+          }
+          case 'rectangle':
+            ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+            break
+          case 'circle':
+            ctx.beginPath()
+            ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
+            ctx.stroke()
+            break
+          case 'text':
+            ctx.save()
+            ctx.font = `${obj.fontSize || 24}px sans-serif`
+            ctx.fillStyle = obj.color
+            ctx.textBaseline = 'top'
+            ctx.fillText(obj.text, obj.x, obj.y)
+            ctx.restore()
+            break
         }
       })
 
-      // 2. Now, apply all erase paths
-      canvasObjects.current.forEach(obj => {
-        if (obj.type !== 'erase') return
-
-        ctx.globalCompositeOperation = 'destination-out'
-        ctx.lineWidth = obj.thickness
-        ctx.lineCap = 'round'
-        ctx.lineJoin = 'round'
-
-        ctx.beginPath()
-        obj.points.forEach((p, i) => {
-          if (i === 0) ctx.moveTo(p.x, p.y)
-          else ctx.lineTo(p.x, p.y)
-        })
-        ctx.stroke()
-      })
-
-      // 3. Reset composite operation
+      // always restore normal mode at the end
       ctx.globalCompositeOperation = 'source-over'
     }
     
