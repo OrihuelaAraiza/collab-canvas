@@ -2,6 +2,7 @@ import React from 'react'
 import { Button } from '@/components/ui/button'
 import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash } from 'react-icons/fa'
 import { IoMdColorPalette } from 'react-icons/io'
+import { useTheme } from './ThemeProvider'
 
 interface DrawingToolbarProps {
   tool: string
@@ -22,6 +23,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   setThickness,
   onClear,
 }) => {
+  const { theme } = useTheme();
   return (
     <div className="absolute top-1/2 left-4 -translate-y-1/2 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md p-2 rounded-lg shadow-lg flex flex-col gap-2 border border-slate-200 dark:border-zinc-700 z-10">
       <Button
@@ -33,7 +35,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           tool === 'pen' ? 'bg-slate-300 dark:bg-zinc-600' : ''
         }`}
       >
-        <FaPen className="h-5 w-5" />
+        <FaPen className="h-5 w-5 dark:text-white" />
       </Button>
       <Button
         variant="ghost"
@@ -44,7 +46,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           tool === 'eraser' ? 'bg-slate-300 dark:bg-zinc-600' : ''
         }`}
       >
-        <FaEraser className="h-5 w-5" />
+        <FaEraser className="h-5 w-5 dark:text-white" />
       </Button>
       <Button
         variant="ghost"
@@ -55,7 +57,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           tool === 'rectangle' ? 'bg-slate-300 dark:bg-zinc-600' : ''
         }`}
       >
-        <FaRegSquare className="h-5 w-5" />
+        <FaRegSquare className="h-5 w-5 dark:text-white" />
       </Button>
       <Button
         variant="ghost"
@@ -66,7 +68,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           tool === 'circle' ? 'bg-slate-300 dark:bg-zinc-600' : ''
         }`}
       >
-        <FaRegCircle className="h-5 w-5" />
+        <FaRegCircle className="h-5 w-5 dark:text-white" />
       </Button>
       
       <div className="w-full h-px bg-slate-300 dark:bg-zinc-600 my-1"></div>
@@ -78,12 +80,12 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         title="Clear Canvas"
         className="transition-all hover:bg-red-200 dark:hover:bg-red-900/50 hover:text-red-600 dark:hover:text-red-400 hover:scale-110"
       >
-        <FaTrash className="h-5 w-5" />
+        <FaTrash className="h-5 w-5 dark:text-white" />
       </Button>
 
       <div className={`relative w-full flex justify-center items-center pt-2 transition-opacity ${tool === 'eraser' ? 'opacity-50 cursor-not-allowed' : 'opacity-100'}`}>
         <label htmlFor="color-picker" className={`cursor-pointer hover:scale-110 transition-all ${tool === 'eraser' ? 'cursor-not-allowed' : ''}`}>
-          <IoMdColorPalette className="h-6 w-6" style={{ color }} />
+          <IoMdColorPalette className="h-6 w-6 dark:text-white" style={{ color }} />
         </label>
         <input
           id="color-picker"
