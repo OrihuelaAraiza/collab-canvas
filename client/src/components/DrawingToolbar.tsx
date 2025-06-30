@@ -113,6 +113,19 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         />
         <span className="text-xs font-bold text-[#1e293b] dark:text-white">{thickness}</span>
       </div>
+      {/* Playback Controls */}
+      <div className="flex flex-col items-center gap-2 pt-4 border-t border-[#60a5fa] dark:border-[#334155] mt-2">
+        <button id="playback-play" className="px-2 py-1 rounded bg-[#60a5fa] text-white text-xs mb-1">▶️ Play</button>
+        <button id="playback-pause" className="px-2 py-1 rounded bg-[#334155] text-white text-xs mb-1">⏸ Pause</button>
+        <label className="text-xs text-[#334155] dark:text-[#cbd5e1]">Speed
+          <select id="playback-speed" className="ml-1 rounded">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+          </select>
+        </label>
+      </div>
     </div>
   )
 } 

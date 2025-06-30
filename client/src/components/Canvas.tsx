@@ -31,7 +31,8 @@ type Stroke = {
   type: 'stroke',
   points: { x: number, y: number }[],
   color: string, 
-  thickness: number 
+  thickness: number,
+  timestamp: number
 }
 type Rectangle = { 
   type: 'rectangle',
@@ -64,6 +65,103 @@ type TextObject = {
 }
 
 type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject
+
+function usePlaybackController(
+  canvasRef: React.RefObject<HTMLCanvasElement>,
+  strokes: CanvasObject[]
+) {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackIndex, setPlaybackIndex] = useState(0)
+  const [speed, setSpeed] = useState(1)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Sort all objects by timestamp for playback (fallback to 0 if missing)
+  const orderedObjects = strokes
+    .filter((obj: CanvasObject) =>
+      obj.type === 'stroke' || obj.type === 'rectangle' || obj.type === 'circle' || obj.type === 'erase' || obj.type === 'text')
+    .sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0))
+
+  useEffect(() => {
+    const playBtn = document.getElementById('playback-play') as HTMLButtonElement | null
+    const pauseBtn = document.getElementById('playback-pause') as HTMLButtonElement | null
+    const speedSel = document.getElementById('playback-speed') as HTMLSelectElement | null
+    if (playBtn) playBtn.onclick = () => { setIsPlaying(true); setPlaybackIndex(0) }
+    if (pauseBtn) pauseBtn.onclick = () => setIsPlaying(false)
+    if (speedSel) speedSel.onchange = (e: Event) => setSpeed(Number((e.target as HTMLSelectElement).value))
+    return () => {
+      if (playBtn) playBtn.onclick = null
+      if (pauseBtn) pauseBtn.onclick = null
+      if (speedSel) speedSel.onchange = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isPlaying) {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      return
+    }
+    if (playbackIndex >= orderedObjects.length) {
+      setIsPlaying(false)
+      return
+    }
+    // Clear canvas
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')!
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    // Draw up to current index
+    for (let i = 0; i <= playbackIndex; i++) {
+      const obj = orderedObjects[i]
+      // ---- set paint mode ---------------------------------------------------
+      if (obj.type === 'erase') {
+        ctx.globalCompositeOperation = 'destination-out'
+        ctx.lineWidth = obj.thickness
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+      } else {
+        ctx.globalCompositeOperation = 'source-over'
+        if (obj.type !== 'text') {
+          ctx.strokeStyle = obj.color
+          ctx.lineWidth  = obj.thickness
+          ctx.lineCap    = 'round'
+          ctx.lineJoin   = 'round'
+        }
+      }
+      // ---- draw the object ---------------------------------------------------
+      switch (obj.type) {
+        case 'stroke':
+        case 'erase': {
+          ctx.beginPath()
+          obj.points.forEach((p: {x: number, y: number}, j: number) => (j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
+          ctx.stroke()
+          break
+        }
+        case 'rectangle':
+          ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+          break
+        case 'circle':
+          ctx.beginPath()
+          ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
+          ctx.stroke()
+          break
+        case 'text':
+          ctx.save()
+          ctx.font = `${obj.fontSize || 24}px sans-serif`
+          ctx.fillStyle = obj.color
+          ctx.textBaseline = 'top'
+          ctx.fillText(obj.text, obj.x, obj.y)
+          ctx.restore()
+          break
+      }
+    }
+    timerRef.current = setTimeout(() => {
+      setPlaybackIndex(idx => idx + 1)
+    }, 200 / speed)
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [isPlaying, playbackIndex, speed, orderedObjects, canvasRef])
+
+  return { isPlaying, setIsPlaying, playbackIndex, setPlaybackIndex, speed, setSpeed }
+}
 
 const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -454,7 +552,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     // Add final object to Yjs array
     if (tool === 'pen') {
       if (currentStrokePoints.length < 2) return
-      const newStroke: Stroke = { type: 'stroke', points: currentStrokePoints, color, thickness }
+      const newStroke: Stroke = { type: 'stroke', points: currentStrokePoints, color, thickness, timestamp: Date.now() }
       canvasObjects.current.push([newStroke])
     } else if (tool === 'eraser') {
       if (currentStrokePoints.length < 2) return
@@ -505,6 +603,8 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       setPendingTextInput(null)
     }
   }, [pendingTextInput])
+
+  const playback = usePlaybackController(canvasRef as React.RefObject<HTMLCanvasElement>, canvasObjects.current.toArray ? canvasObjects.current.toArray() : [])
 
   return (
     <div ref={wrapperRef} className={styles.wrapper}>
