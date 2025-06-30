@@ -127,8 +127,8 @@ const VoiceChat: React.FC<VoiceChatProps> = ({ socket, roomId }) => {
   }
 
   return (
-    <div className="absolute bottom-4 right-4 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md p-2 rounded-lg shadow-lg z-10 voice-chat-wrapper">
-      <div className="flex items-center gap-2">
+    <div className="absolute bottom-4 right-4 bg-[#dbeafe] dark:bg-[#1e293b] border border-[#60a5fa] dark:border-[#334155] p-2 rounded-lg shadow-lg z-10 voice-chat-wrapper">
+      <div className="flex items-center gap-2 text-[#1e293b] dark:text-white">
         <video ref={userVideo} muted autoPlay playsInline style={{ display: 'none' }} />
         {isInChat && peers.map(({ peerID, peer }) => (
           <Audio key={peerID} peer={peer} />
@@ -136,14 +136,14 @@ const VoiceChat: React.FC<VoiceChatProps> = ({ socket, roomId }) => {
         {isInChat ? (
           <>
             <Button onClick={toggleMute} size="icon" variant="ghost" className="rounded-full">
-              {isMuted ? <MicOff className="h-5 w-5 text-red-500" /> : <Mic className="h-5 w-5 text-green-500" />}
+              {isMuted ? <MicOff className="h-5 w-5 text-red-500" /> : <Mic className="h-5 w-5 text-green-600 dark:text-green-400" />}
             </Button>
             <Button onClick={leaveVoiceChat} size="sm" variant="destructive">
               Leave
             </Button>
           </>
         ) : (
-          <Button onClick={joinVoiceChat} size="sm">
+          <Button onClick={joinVoiceChat} size="sm" className="bg-[#1e3a5c] hover:bg-[#274472] text-white dark:bg-[#60a5fa] dark:hover:bg-[#3b82f6]">
             Join Voice
           </Button>
         )}

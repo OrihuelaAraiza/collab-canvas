@@ -54,7 +54,16 @@ type ErasePath = {
   thickness: number
 }
 
-type CanvasObject = Stroke | Rectangle | Circle | ErasePath
+type TextObject = {
+  type: 'text',
+  x: number,
+  y: number,
+  text: string,
+  color: string,
+  fontSize: number
+}
+
+type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject
 
 const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -69,6 +78,11 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const [color, setColor] = useState('#000000')
   const [thickness, setThickness] = useState(5)
   const [socket, setSocket] = useState<Socket | null>(null)
+  const [textInput, setTextInput] = useState<{ x: number, y: number } | null>(null)
+  const [textValue, setTextValue] = useState('')
+  const [hoverPos, setHoverPos] = useState<{ x: number, y: number } | null>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const [pendingTextInput, setPendingTextInput] = useState<{ x: number, y: number } | null>(null)
 
   // Initialize CRDT with room ID
   const ydoc = useRef(new Y.Doc())
@@ -127,13 +141,13 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       // 1. Draw all the creative objects first
       canvasObjects.current.forEach(obj => {
         if (obj.type === 'erase') return // Skip erase paths for now
-
         ctx.globalCompositeOperation = 'source-over'
-        ctx.strokeStyle = obj.color
-        ctx.lineWidth = obj.thickness
-        ctx.lineCap = 'round'
-        ctx.lineJoin = 'round'
-
+        if (obj.type !== 'text') {
+          ctx.strokeStyle = obj.color
+          ctx.lineWidth = obj.thickness
+          ctx.lineCap = 'round'
+          ctx.lineJoin = 'round'
+        }
         if (obj.type === 'stroke') {
           ctx.beginPath()
           obj.points.forEach((p, i) => {
@@ -147,6 +161,13 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
           ctx.beginPath()
           ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
           ctx.stroke()
+        } else if (obj.type === 'text') {
+          ctx.save()
+          ctx.font = `${obj.fontSize || 24}px sans-serif`
+          ctx.fillStyle = obj.color
+          ctx.textBaseline = 'top'
+          ctx.fillText(obj.text, obj.x, obj.y)
+          ctx.restore()
         }
       })
 
@@ -387,15 +408,21 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const { x, y } = getCanvasPosition(e)
     setIsDrawing(true)
     setStartPos({ x, y })
-
     if (tool === 'pen' || tool === 'eraser') {
       setCurrentStrokePoints([{ x, y }])
+    } else if (tool === 'text') {
+      setPendingTextInput({ x, y })
+      setTextValue('')
     }
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
     const { x, y } = getCanvasPosition(e)
     provider.current?.awareness.setLocalStateField('cursor', { x, y })
+
+    if (tool === 'text' && !isDrawing && !textInput) {
+      setHoverPos({ x, y })
+    }
 
     if (!isDrawing) return // Don't do anything if not drawing
 
@@ -456,11 +483,16 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     setCurrentStrokePoints([])
     provider.current?.awareness.setLocalStateField('cursor', null)
   }
+
+  const handlePointerLeave = (e: React.PointerEvent) => {
+    setHoverPos(null)
+    handlePointerUp(e)
+  }
   
   // Helper to get mouse position relative to canvas
   const getCanvasPosition = (e: React.PointerEvent) => {
-    const rect = canvasRef.current!.getBoundingClientRect()
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    const wrapperRect = wrapperRef.current!.getBoundingClientRect()
+    return { x: e.clientX - wrapperRect.left, y: e.clientY - wrapperRect.top }
   }
 
   // Helper to draw a stroke
@@ -472,8 +504,15 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     ctx.stroke()
   }
 
+  useEffect(() => {
+    if (pendingTextInput) {
+      setTextInput(pendingTextInput)
+      setPendingTextInput(null)
+    }
+  }, [pendingTextInput])
+
   return (
-    <div className={styles.wrapper}>
+    <div ref={wrapperRef} className={styles.wrapper}>
       <HeaderActions
         onExportPNG={exportPNG}
         onExportPDF={exportPDF}
@@ -509,8 +548,77 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
+        style={textInput && tool === 'text' ? { pointerEvents: 'none' } : {}}
       />
+      {hoverPos && tool === 'text' && !textInput && (
+        <span
+          style={{
+            position: 'absolute',
+            left: hoverPos.x,
+            top: hoverPos.y,
+            fontSize: 24,
+            color: color,
+            background: 'rgba(255,255,255,0.7)',
+            border: '1.5px dashed #60a5fa',
+            borderRadius: 4,
+            padding: '0 4px',
+            pointerEvents: 'none',
+            zIndex: 15,
+            animation: 'blink 1s steps(2, start) infinite',
+          }}
+        >
+          T
+        </span>
+      )}
+      {textInput && tool === 'text' && (
+        <input
+          ref={el => {
+            if (el) {
+              setTimeout(() => {
+                el.focus()
+              }, 50)
+              console.log('Text input rendered and focus requested')
+            }
+          }}
+          autoFocus
+          style={{
+            position: 'absolute',
+            left: textInput.x,
+            top: textInput.y,
+            fontSize: 24,
+            color: '#111', // debug black text
+            background: '#fff', // debug white background
+            border: '2px solid red', // debug border
+            borderRadius: 4,
+            zIndex: 9999,
+            pointerEvents: 'auto',
+          }}
+          value={textValue}
+          onChange={e => setTextValue(e.target.value)}
+          onBlur={() => {
+            console.log('Text input blurred')
+            if (textValue.trim()) {
+              const newText: TextObject = {
+                type: 'text',
+                x: textInput.x,
+                y: textInput.y,
+                text: textValue,
+                color,
+                fontSize: 24,
+              }
+              canvasObjects.current.push([newText])
+            }
+            setTextInput(null)
+            setTextValue('')
+          }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              (e.target as HTMLInputElement).blur()
+            }
+          }}
+        />
+      )}
     </div>
   )
 }
