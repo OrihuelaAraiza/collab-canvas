@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button } from '@/components/ui/button'
-import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash } from 'react-icons/fa'
+import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash, FaFillDrip } from 'react-icons/fa'
 import { IoMdColorPalette } from 'react-icons/io'
 import { Layers3 } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
@@ -73,6 +73,15 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
         className={`transition-all hover:bg-[#bfdbfe] dark:hover:bg-[#334155] hover:scale-110 ${tool === 'text' ? 'bg-[#60a5fa] dark:bg-[#334155]' : ''}`}
       >
         <span className="text-lg font-bold">T</span>
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setTool('paint-bucket')}
+        title="Paint Bucket"
+        className={`transition-all hover:bg-[#bfdbfe] dark:hover:bg-[#334155] hover:scale-110 ${tool === 'paint-bucket' ? 'bg-[#60a5fa] dark:bg-[#334155]' : ''}`}
+      >
+        <FaFillDrip className="h-5 w-5" />
       </Button>
       
       <div className="w-full h-px bg-[#60a5fa] dark:bg-[#334155] my-1"></div>

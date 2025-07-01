@@ -66,7 +66,16 @@ type TextObject = {
   fontSize: number
 }
 
-type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject
+type FillObject = {
+  type: 'fill',
+  x: number,
+  y: number,
+  color: string,
+  timestamp: number,
+  filledPixels: { x: number, y: number }[]
+}
+
+type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject | FillObject
 
 export type Layer = {
   id: string;
@@ -88,7 +97,7 @@ function usePlaybackController(
   // Sort all objects by timestamp for playback (fallback to 0 if missing)
   const orderedObjects = strokes
     .filter((obj: CanvasObject) =>
-      obj.type === 'stroke' || obj.type === 'rectangle' || obj.type === 'circle' || obj.type === 'erase' || obj.type === 'text')
+      obj.type === 'stroke' || obj.type === 'rectangle' || obj.type === 'circle' || obj.type === 'erase' || obj.type === 'text' || obj.type === 'fill')
     .sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0))
 
   useEffect(() => {
@@ -130,7 +139,7 @@ function usePlaybackController(
         ctx.lineJoin = 'round'
       } else {
         ctx.globalCompositeOperation = 'source-over'
-        if (obj.type !== 'text') {
+        if (obj.type !== 'text' && obj.type !== 'fill') {
           ctx.strokeStyle = obj.color
           ctx.lineWidth  = obj.thickness
           ctx.lineCap    = 'round'
@@ -160,6 +169,19 @@ function usePlaybackController(
           ctx.fillStyle = obj.color
           ctx.textBaseline = 'top'
           ctx.fillText(obj.text, obj.x, obj.y)
+          ctx.restore()
+          break
+        case 'fill':
+          // For playback, we apply the flood fill to the stored pixels
+          ctx.save()
+          ctx.globalCompositeOperation = 'source-over'
+          ctx.fillStyle = obj.color
+          
+          // Fill each pixel that was filled in the original operation
+          obj.filledPixels.forEach(pixel => {
+            ctx.fillRect(pixel.x, pixel.y, 1, 1)
+          })
+          
           ctx.restore()
           break
       }
@@ -448,6 +470,20 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
 
+    // Scratch canvas pool for better performance
+    const scratchPool: HTMLCanvasElement[] = []
+
+    const getScratch = (): CanvasRenderingContext2D => {
+      const c = scratchPool.pop() || document.createElement('canvas')
+      c.width = canvas.width
+      c.height = canvas.height
+      return c.getContext('2d')!
+    }
+
+    const releaseScratch = (lctx: CanvasRenderingContext2D) => {
+      scratchPool.push(lctx.canvas)
+    }
+
     const renderObjects = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
@@ -457,74 +493,88 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         .filter(layer => layer.get('visible'))
 
       layers.forEach(layer => {
+        // 1. Draw this layer into a scratch canvas
+        const lctx = getScratch()
+
         const objects = layer.get('objects') as Y.Array<CanvasObject>
         objects.forEach((obj: CanvasObject) => {
-          // ---- set paint mode ---------------------------------------------------
+          // Set paint mode for this layer only
           if (obj.type === 'erase') {
-            ctx.globalCompositeOperation = 'destination-out'
-            ctx.lineWidth = obj.thickness
-            ctx.lineCap = 'round'
-            ctx.lineJoin = 'round'
+            lctx.globalCompositeOperation = 'destination-out'
+            lctx.lineWidth = obj.thickness
+            lctx.lineCap = 'round'
+            lctx.lineJoin = 'round'
           } else {
-            ctx.globalCompositeOperation = 'source-over'
-            if (obj.type !== 'text') {
-              ctx.strokeStyle = obj.color
-              ctx.lineWidth  = obj.thickness
-              ctx.lineCap    = 'round'
-              ctx.lineJoin   = 'round'
+            lctx.globalCompositeOperation = 'source-over'
+            if (obj.type !== 'text' && obj.type !== 'fill') {
+              lctx.strokeStyle = obj.color
+              lctx.lineWidth = obj.thickness
+              lctx.lineCap = 'round'
+              lctx.lineJoin = 'round'
             }
           }
 
-          // ---- draw the object ---------------------------------------------------
+          // Draw the object on the layer canvas
           switch (obj.type) {
             case 'stroke':
             case 'erase': {
-              ctx.beginPath()
-              obj.points.forEach((p: {x: number, y: number}, i: number) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
-              ctx.stroke()
+              lctx.beginPath()
+              obj.points.forEach((p: {x: number, y: number}, i: number) => (i ? lctx.lineTo(p.x, p.y) : lctx.moveTo(p.x, p.y)))
+              lctx.stroke()
               break
             }
             case 'rectangle':
-              ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+              lctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
               break
             case 'circle':
-              ctx.beginPath()
-              ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
-              ctx.stroke()
+              lctx.beginPath()
+              lctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
+              lctx.stroke()
               break
             case 'text':
-              ctx.save()
-              ctx.font = `${obj.fontSize || 24}px sans-serif`
-              ctx.fillStyle = obj.color
-              ctx.textBaseline = 'top'
-              ctx.fillText(obj.text, obj.x, obj.y)
-              ctx.restore()
+              lctx.save()
+              lctx.font = `${obj.fontSize || 24}px sans-serif`
+              lctx.fillStyle = obj.color
+              lctx.textBaseline = 'top'
+              lctx.fillText(obj.text, obj.x, obj.y)
+              lctx.restore()
+              break
+            case 'fill':
+              // Apply the flood fill to the stored pixels
+              lctx.save()
+              lctx.globalCompositeOperation = 'source-over'
+              lctx.fillStyle = obj.color
+              
+              // Fill each pixel that was filled in the original operation
+              obj.filledPixels.forEach(pixel => {
+                lctx.fillRect(pixel.x, pixel.y, 1, 1)
+              })
+              
+              lctx.restore()
               break
           }
         })
+
+        // 2. Composite this layer bitmap onto the main canvas
+        ctx.drawImage(lctx.canvas, 0, 0)
+        
+        // Return the scratch canvas to the pool
+        releaseScratch(lctx)
       })
 
-      // always restore normal mode at the end
+      // Always restore normal mode at the end
       ctx.globalCompositeOperation = 'source-over'
     }
     
-    renderObjects() // Initial render
-    
-    // Observe changes to layers and their objects
+    // Use deep observer that fires for any change anywhere in the document
     const observer = () => renderObjects()
-    yLayers.current.observe(observer)
+    ydoc.current.on('afterTransaction', observer)
     
-    // Also observe individual layer objects
-    const layerObservers: (() => void)[] = []
-    yLayers.current.forEach(layer => {
-      const objects = layer.get('objects') as Y.Array<CanvasObject>
-      objects.observe(observer)
-      layerObservers.push(() => objects.unobserve(observer))
-    })
+    // Draw once on mount
+    renderObjects()
     
     return () => {
-      yLayers.current.unobserve(observer)
-      layerObservers.forEach(unobserve => unobserve())
+      ydoc.current.off('afterTransaction', observer)
     }
   }, [])
 
@@ -741,6 +791,25 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   // === Pointer handlers ===
   const handlePointerDown = (e: React.PointerEvent) => {
     const { x, y } = getCanvasPosition(e)
+    
+    if (tool === 'paint-bucket') {
+      // For paint-bucket, we don't need to track drawing state
+      // Just perform the flood fill immediately
+      const filledPixels = floodFill(x, y, color)
+      
+      // Add the fill operation to the CRDT for collaboration
+      const newFill: FillObject = { 
+        type: 'fill', 
+        x, 
+        y, 
+        color, 
+        timestamp: Date.now(),
+        filledPixels
+      }
+      addObjectToLayer(activeLayerId, newFill)
+      return
+    }
+    
     setIsDrawing(true)
     setStartPos({ x, y })
     if (tool === 'pen' || tool === 'eraser') {
@@ -837,6 +906,95 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     ctx.moveTo(points[0].x, points[0].y)
     points.forEach(p => ctx.lineTo(p.x, p.y))
     ctx.stroke()
+  }
+
+  // Flood-fill algorithm implementation
+  const floodFill = (startX: number, startY: number, fillColor: string): { x: number, y: number }[] => {
+    const canvas = canvasRef.current
+    if (!canvas) return []
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return []
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+    const width = canvas.width
+    const height = canvas.height
+
+    // Convert hex color to RGBA
+    const hexToRgba = (hex: string) => {
+      const r = parseInt(hex.slice(1, 3), 16)
+      const g = parseInt(hex.slice(3, 5), 16)
+      const b = parseInt(hex.slice(5, 7), 16)
+      return [r, g, b, 255]
+    }
+
+    const fillRgba = hexToRgba(fillColor)
+    
+    // Get the target color (the color we're replacing)
+    const startIndex = (startY * width + startX) * 4
+    const targetR = data[startIndex]
+    const targetG = data[startIndex + 1]
+    const targetB = data[startIndex + 2]
+    const targetA = data[startIndex + 3]
+
+    // If we're already filling with the same color, do nothing
+    if (targetR === fillRgba[0] && targetG === fillRgba[1] && targetB === fillRgba[2] && targetA === fillRgba[3]) {
+      return []
+    }
+
+    // Color tolerance for better matching (adjust this value as needed)
+    const tolerance = 5
+
+    // Helper function to check if colors are similar
+    const colorsMatch = (r1: number, g1: number, b1: number, a1: number, 
+                        r2: number, g2: number, b2: number, a2: number) => {
+      return Math.abs(r1 - r2) <= tolerance &&
+             Math.abs(g1 - g2) <= tolerance &&
+             Math.abs(b1 - b2) <= tolerance &&
+             Math.abs(a1 - a2) <= tolerance
+    }
+
+    // Stack-based flood fill algorithm with optimized scanning
+    const stack: [number, number][] = [[startX, startY]]
+    const filledPixels: { x: number, y: number }[] = []
+    const visited = new Set<string>()
+    
+    while (stack.length > 0) {
+      const [x, y] = stack.pop()!
+      const key = `${x},${y}`
+      
+      if (x < 0 || x >= width || y < 0 || y >= height || visited.has(key)) continue
+      
+      visited.add(key)
+      const index = (y * width + x) * 4
+      
+      // Check if this pixel matches the target color
+      if (!colorsMatch(data[index], data[index + 1], data[index + 2], data[index + 3],
+                      targetR, targetG, targetB, targetA)) {
+        continue
+      }
+      
+      // Fill this pixel
+      data[index] = fillRgba[0]
+      data[index + 1] = fillRgba[1]
+      data[index + 2] = fillRgba[2]
+      data[index + 3] = fillRgba[3]
+      
+      // Record this pixel as filled
+      filledPixels.push({ x, y })
+      
+      // Add neighboring pixels to the stack
+      stack.push([x + 1, y])
+      stack.push([x - 1, y])
+      stack.push([x, y + 1])
+      stack.push([x, y - 1])
+    }
+    
+    // Apply the changes to the canvas
+    ctx.putImageData(imageData, 0, 0)
+    
+    return filledPixels
   }
 
   useEffect(() => {
