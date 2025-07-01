@@ -2,6 +2,7 @@ import React from 'react'
 import { Button } from '@/components/ui/button'
 import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash } from 'react-icons/fa'
 import { IoMdColorPalette } from 'react-icons/io'
+import { Layers3 } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
 
 interface DrawingToolbarProps {
@@ -12,6 +13,7 @@ interface DrawingToolbarProps {
   thickness: number
   setThickness: (thickness: number) => void
   onClear: () => void;
+  onToggleLayers: () => void;
 }
 
 export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
@@ -22,6 +24,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   thickness,
   setThickness,
   onClear,
+  onToggleLayers,
 }) => {
   const { theme } = useTheme();
   return (
@@ -73,6 +76,16 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       </Button>
       
       <div className="w-full h-px bg-[#60a5fa] dark:bg-[#334155] my-1"></div>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onToggleLayers}
+        title="Layers"
+        className="transition-all hover:bg-[#bfdbfe] dark:hover:bg-[#334155] hover:scale-110"
+      >
+        <Layers3 className="h-5 w-5" />
+      </Button>
 
       <Button
         variant="ghost"

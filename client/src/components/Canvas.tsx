@@ -11,6 +11,8 @@ import styles from './Canvas.module.css'
 import { DrawingToolbar } from './DrawingToolbar'
 import VoiceChat from './VoiceChat'
 import { HeaderActions } from './layout/HeaderActions'
+import { LayerPanel } from './LayerPanel'
+import { v4 as uuidv4 } from 'uuid'
 
 export interface CanvasHandles {
   onUndo: () => void
@@ -65,6 +67,14 @@ type TextObject = {
 }
 
 type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject
+
+export type Layer = {
+  id: string;
+  name: string;
+  visible: boolean;
+  zIndex: number;
+  objects: CanvasObject[];
+};
 
 function usePlaybackController(
   canvasRef: React.RefObject<HTMLCanvasElement>,
@@ -181,12 +191,126 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const [hoverPos, setHoverPos] = useState<{ x: number, y: number } | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [pendingTextInput, setPendingTextInput] = useState<{ x: number, y: number } | null>(null)
+  const [layers, setLayers] = useState<Layer[]>([])
+  const [showLayerPanel, setShowLayerPanel] = useState(false)
 
   // Initialize CRDT with room ID
   const ydoc = useRef(new Y.Doc())
   const provider = useRef<SocketIOProvider | null>(null)
-  const canvasObjects = useRef(ydoc.current.getArray<CanvasObject>('canvas-objects'))
-  const undoManager = useRef(new Y.UndoManager(canvasObjects.current))
+  const yLayers = useRef<Y.Array<Y.Map<any>>>(ydoc.current.getArray('layers'))
+  
+  // Active layer state
+  const [activeLayerId, setActiveLayerId] = useState<string>(() => {
+    const firstLayer = yLayers.current.get(0)
+    return firstLayer ? firstLayer.get('id') : ''
+  })
+  
+  // Updated undo manager to track all layers and their objects
+  const undoManager = useRef(new Y.UndoManager([yLayers.current], {
+    captureTimeout: 300
+  }))
+
+  // Function to update undo manager to track all layer objects
+  const updateUndoManager = () => {
+    const allObjectsArrays: Y.Array<CanvasObject>[] = []
+    yLayers.current.forEach(layer => {
+      const objects = layer.get('objects') as Y.Array<CanvasObject>
+      allObjectsArrays.push(objects)
+    })
+    
+    // Create a new undo manager that tracks both layers and all object arrays
+    undoManager.current = new Y.UndoManager([yLayers.current, ...allObjectsArrays], {
+      captureTimeout: 300
+    })
+  }
+
+  // Helper functions for layer management
+  function getActiveLayer(): Y.Map<any> | undefined {
+    return yLayers.current.toArray().find(l => l.get('id') === activeLayerId)
+  }
+
+  function addObjectToLayer(layerId: string, obj: CanvasObject) {
+    const layer = yLayers.current.toArray().find(l => l.get('id') === layerId)
+    if (layer) {
+      (layer.get('objects') as Y.Array<CanvasObject>).push([obj])
+    }
+  }
+
+  function clearLayer(layerId: string) {
+    const layer = yLayers.current.toArray().find(l => l.get('id') === layerId)
+    if (layer) {
+      const objects = layer.get('objects') as Y.Array<CanvasObject>
+      objects.delete(0, objects.length)
+    }
+  }
+
+  function clearAllLayers() {
+    yLayers.current.forEach(l => {
+      const objects = l.get('objects') as Y.Array<CanvasObject>
+      objects.delete(0, objects.length)
+    })
+  }
+
+  function moveLayer(layerId: string, toIndex: number) {
+    const layersArr = yLayers.current.toArray()
+    const idx = layersArr.findIndex(l => l.get('id') === layerId)
+    if (idx === -1 || toIndex < 0 || toIndex >= layersArr.length) return
+    const [layer] = layersArr.splice(idx, 1)
+    layersArr.splice(toIndex, 0, layer)
+    // Update zIndex for all layers
+    layersArr.forEach((l, i) => l.set('zIndex', i))
+    // Replace the Y.Array with the new order
+    yLayers.current.delete(0, yLayers.current.length)
+    yLayers.current.insert(0, layersArr)
+  }
+
+  function renameLayer(layerId: string, newName: string) {
+    const layer = yLayers.current.toArray().find(l => l.get('id') === layerId)
+    if (layer) layer.set('name', newName)
+  }
+
+  function setLayerVisibility(layerId: string, visible: boolean) {
+    const layer = yLayers.current.toArray().find(l => l.get('id') === layerId)
+    if (layer) layer.set('visible', visible)
+  }
+
+  function addLayer() {
+    const newLayer = new Y.Map()
+    newLayer.set('id', uuidv4())
+    newLayer.set('name', `Layer ${yLayers.current.length + 1}`)
+    newLayer.set('visible', true)
+    newLayer.set('zIndex', yLayers.current.length)
+    newLayer.set('objects', new Y.Array())
+    yLayers.current.push([newLayer])
+    
+    // Update undo manager to track the new layer's objects
+    updateUndoManager()
+  }
+
+  function removeLayer(layerId: string) {
+    const idx = yLayers.current.toArray().findIndex(l => l.get('id') === layerId)
+    if (idx !== -1) yLayers.current.delete(idx, 1)
+    
+    // Update undo manager after removing layer
+    updateUndoManager()
+  }
+
+  // 2. If no layers exist, create a default one
+  useEffect(() => {
+    if (yLayers.current.length === 0) {
+      const defaultLayer = new Y.Map()
+      defaultLayer.set('id', uuidv4())
+      defaultLayer.set('name', 'Layer 1')
+      defaultLayer.set('visible', true)
+      defaultLayer.set('zIndex', 0)
+      defaultLayer.set('objects', new Y.Array())
+      yLayers.current.push([defaultLayer])
+      setActiveLayerId(defaultLayer.get('id') as string)
+      
+      // Update undo manager to track the default layer's objects
+      updateUndoManager()
+    }
+  }, [])
 
   // Assign a random color and register in awareness
   useEffect(() => {
@@ -194,6 +318,97 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const userColor = '#' + Math.floor(Math.random() * 0xffffff).toString(16)
     aw?.setLocalStateField('user', { color: userColor })
     setColor(userColor) // Start with the user's random color
+  }, [])
+
+  // Sync layers state with Yjs layers
+  useEffect(() => {
+    const updateLayers = () => {
+      const yjsLayers = yLayers.current.toArray()
+      const layersData: Layer[] = yjsLayers.map(layer => ({
+        id: layer.get('id') as string,
+        name: layer.get('name') as string,
+        visible: layer.get('visible') as boolean,
+        zIndex: layer.get('zIndex') as number,
+        objects: (layer.get('objects') as Y.Array<CanvasObject>).toArray()
+      }))
+      console.log('[Yjs] updateLayers fired', layersData)
+      setLayers(layersData)
+    }
+
+    updateLayers()
+    
+    // Create a comprehensive observer that watches both array and individual layer changes
+    const observer = () => updateLayers()
+    
+    // Observe changes to the layers array itself
+    yLayers.current.observe(observer)
+    
+    // Set up observers for individual layers and their objects
+    const setupLayerObservers = () => {
+      const layerObservers: (() => void)[] = []
+      
+      yLayers.current.forEach(layer => {
+        // Observe the layer map itself
+        layer.observe(observer)
+        layerObservers.push(() => layer.unobserve(observer))
+        
+        // Observe the objects array within the layer
+        const objects = layer.get('objects') as Y.Array<CanvasObject>
+        objects.observe(observer)
+        layerObservers.push(() => objects.unobserve(observer))
+      })
+      
+      return layerObservers
+    }
+    
+    let layerObservers = setupLayerObservers()
+    
+    // Re-setup observers when the layers array changes
+    const arrayObserver = () => {
+      // Clean up old observers
+      layerObservers.forEach(unobserve => unobserve())
+      // Set up new observers
+      layerObservers = setupLayerObservers()
+      // Update the layers state
+      updateLayers()
+    }
+    
+    yLayers.current.observe(arrayObserver)
+    
+    return () => {
+      yLayers.current.unobserve(observer)
+      yLayers.current.unobserve(arrayObserver)
+      layerObservers.forEach(unobserve => unobserve())
+    }
+  }, [])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault()
+        setShowLayerPanel(prev => !prev)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          // Ctrl+Shift+Z or Cmd+Shift+Z for redo
+          console.log('Keyboard redo called')
+          undoManager.current.redo()
+        } else {
+          // Ctrl+Z or Cmd+Z for undo
+          console.log('Keyboard undo called')
+          undoManager.current.undo()
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault()
+        // Ctrl+Y or Cmd+Y for redo (alternative)
+        console.log('Keyboard redo (Y) called')
+        undoManager.current.redo()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   // Canvas setup useEffect
@@ -236,49 +451,57 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const renderObjects = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      canvasObjects.current.forEach(obj => {
-        // ---- set paint mode ---------------------------------------------------
-        if (obj.type === 'erase') {
-          ctx.globalCompositeOperation = 'destination-out'
-          ctx.lineWidth = obj.thickness
-          ctx.lineCap = 'round'
-          ctx.lineJoin = 'round'
-        } else {
-          ctx.globalCompositeOperation = 'source-over'
-          if (obj.type !== 'text') {
-            ctx.strokeStyle = obj.color
-            ctx.lineWidth  = obj.thickness
-            ctx.lineCap    = 'round'
-            ctx.lineJoin   = 'round'
-          }
-        }
+      // Get all layers sorted by zIndex and render visible ones
+      const layers = yLayers.current.toArray()
+        .sort((a, b) => a.get('zIndex') - b.get('zIndex'))
+        .filter(layer => layer.get('visible'))
 
-        // ---- draw the object ---------------------------------------------------
-        switch (obj.type) {
-          case 'stroke':
-          case 'erase': {
-            ctx.beginPath()
-            obj.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
-            ctx.stroke()
-            break
+      layers.forEach(layer => {
+        const objects = layer.get('objects') as Y.Array<CanvasObject>
+        objects.forEach((obj: CanvasObject) => {
+          // ---- set paint mode ---------------------------------------------------
+          if (obj.type === 'erase') {
+            ctx.globalCompositeOperation = 'destination-out'
+            ctx.lineWidth = obj.thickness
+            ctx.lineCap = 'round'
+            ctx.lineJoin = 'round'
+          } else {
+            ctx.globalCompositeOperation = 'source-over'
+            if (obj.type !== 'text') {
+              ctx.strokeStyle = obj.color
+              ctx.lineWidth  = obj.thickness
+              ctx.lineCap    = 'round'
+              ctx.lineJoin   = 'round'
+            }
           }
-          case 'rectangle':
-            ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
-            break
-          case 'circle':
-            ctx.beginPath()
-            ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
-            ctx.stroke()
-            break
-          case 'text':
-            ctx.save()
-            ctx.font = `${obj.fontSize || 24}px sans-serif`
-            ctx.fillStyle = obj.color
-            ctx.textBaseline = 'top'
-            ctx.fillText(obj.text, obj.x, obj.y)
-            ctx.restore()
-            break
-        }
+
+          // ---- draw the object ---------------------------------------------------
+          switch (obj.type) {
+            case 'stroke':
+            case 'erase': {
+              ctx.beginPath()
+              obj.points.forEach((p: {x: number, y: number}, i: number) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
+              ctx.stroke()
+              break
+            }
+            case 'rectangle':
+              ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+              break
+            case 'circle':
+              ctx.beginPath()
+              ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI)
+              ctx.stroke()
+              break
+            case 'text':
+              ctx.save()
+              ctx.font = `${obj.fontSize || 24}px sans-serif`
+              ctx.fillStyle = obj.color
+              ctx.textBaseline = 'top'
+              ctx.fillText(obj.text, obj.x, obj.y)
+              ctx.restore()
+              break
+          }
+        })
       })
 
       // always restore normal mode at the end
@@ -286,8 +509,23 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     }
     
     renderObjects() // Initial render
-    canvasObjects.current.observe(renderObjects)
-    return () => { canvasObjects.current.unobserve(renderObjects) }
+    
+    // Observe changes to layers and their objects
+    const observer = () => renderObjects()
+    yLayers.current.observe(observer)
+    
+    // Also observe individual layer objects
+    const layerObservers: (() => void)[] = []
+    yLayers.current.forEach(layer => {
+      const objects = layer.get('objects') as Y.Array<CanvasObject>
+      objects.observe(observer)
+      layerObservers.push(() => objects.unobserve(observer))
+    })
+    
+    return () => {
+      yLayers.current.unobserve(observer)
+      layerObservers.forEach(unobserve => unobserve())
+    }
   }, [])
 
   // 3. Listen for remote cursors and render them
@@ -476,9 +714,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const clearCanvas = () => {
     if (window.confirm('Are you sure you want to clear the canvas? This action cannot be undone.')) {
       // Delete all objects from the Yjs array
-      if (canvasObjects.current.length > 0) {
-        canvasObjects.current.delete(0, canvasObjects.current.length)
-      }
+      clearAllLayers()
     }
   }
 
@@ -486,8 +722,14 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   useEffect(() => {
     if (onLoad) {
       onLoad({
-        onUndo: () => undoManager.current.undo(),
-        onRedo: () => undoManager.current.redo(),
+        onUndo: () => {
+          console.log('Undo called')
+          undoManager.current.undo()
+        },
+        onRedo: () => {
+          console.log('Redo called')
+          undoManager.current.redo()
+        },
         onCopy: copyRoomCode,
         onExportPNG: exportPNG,
         onExportPDF: exportPDF,
@@ -553,18 +795,18 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     if (tool === 'pen') {
       if (currentStrokePoints.length < 2) return
       const newStroke: Stroke = { type: 'stroke', points: currentStrokePoints, color, thickness, timestamp: Date.now() }
-      canvasObjects.current.push([newStroke])
+      addObjectToLayer(activeLayerId, newStroke)
     } else if (tool === 'eraser') {
       if (currentStrokePoints.length < 2) return
       const newErase: ErasePath = { type: 'erase', points: currentStrokePoints, thickness }
-      canvasObjects.current.push([newErase])
+      addObjectToLayer(activeLayerId, newErase)
     } else if (tool === 'rectangle') {
       const newRect: Rectangle = { type: 'rectangle', x: startPos.x, y: startPos.y, width: endX - startPos.x, height: endY - startPos.y, color, thickness }
-      canvasObjects.current.push([newRect])
+      addObjectToLayer(activeLayerId, newRect)
     } else if (tool === 'circle') {
       const radius = Math.sqrt(Math.pow(endX - startPos.x, 2) + Math.pow(endY - startPos.y, 2))
       const newCircle: Circle = { type: 'circle', x: startPos.x, y: startPos.y, radius, color, thickness }
-      canvasObjects.current.push([newCircle])
+      addObjectToLayer(activeLayerId, newCircle)
     }
 
     // Clear the preview canvas
@@ -604,7 +846,21 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     }
   }, [pendingTextInput])
 
-  const playback = usePlaybackController(canvasRef as React.RefObject<HTMLCanvasElement>, canvasObjects.current.toArray ? canvasObjects.current.toArray() : [])
+  // Get all objects from all visible layers for playback
+  const getAllObjects = (): CanvasObject[] => {
+    const layers = yLayers.current.toArray()
+      .sort((a, b) => a.get('zIndex') - b.get('zIndex'))
+      .filter(layer => layer.get('visible'))
+    
+    const allObjects: CanvasObject[] = []
+    layers.forEach(layer => {
+      const objects = layer.get('objects') as Y.Array<CanvasObject>
+      allObjects.push(...objects.toArray())
+    })
+    return allObjects
+  }
+
+  const playback = usePlaybackController(canvasRef as React.RefObject<HTMLCanvasElement>, getAllObjects())
 
   return (
     <div ref={wrapperRef} className={styles.wrapper}>
@@ -613,16 +869,19 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         onExportPDF={exportPDF}
         onCopyRoomId={copyRoomCode}
       />
-      <DrawingToolbar
-        tool={tool}
-        setTool={setTool}
-        color={color}
-        setColor={setColor}
-        thickness={thickness}
-        setThickness={setThickness}
-        onClear={clearCanvas}
-      />
-      {socket && <VoiceChat socket={socket} roomId={roomId} />}
+      <div className="flex h-full">
+        <div className="flex-1 relative">
+          <DrawingToolbar
+            tool={tool}
+            setTool={setTool}
+            color={color}
+            setColor={setColor}
+            thickness={thickness}
+            setThickness={setThickness}
+            onClear={clearCanvas}
+            onToggleLayers={() => setShowLayerPanel(!showLayerPanel)}
+          />
+          {socket && <VoiceChat socket={socket} roomId={roomId} />}
       {/* Overlay remote cursors */}
       {cursors.map(c => (
         <div
@@ -702,7 +961,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
                 color,
                 fontSize: 24,
               }
-              canvasObjects.current.push([newText])
+              addObjectToLayer(activeLayerId, newText)
             }
             setTextInput(null)
             setTextValue('')
@@ -714,6 +973,20 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
           }}
         />
       )}
+        </div>
+        <LayerPanel
+          layers={layers}
+          active={activeLayerId}
+          setActive={setActiveLayerId}
+          moveLayer={moveLayer}
+          addLayer={addLayer}
+          removeLayer={removeLayer}
+          setLayerVisibility={setLayerVisibility}
+          renameLayer={renameLayer}
+          onClose={() => setShowLayerPanel(false)}
+          isVisible={showLayerPanel}
+        />
+      </div>
     </div>
   )
 }
