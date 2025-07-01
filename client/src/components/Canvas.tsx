@@ -41,20 +41,23 @@ type Rectangle = {
   x: number, y: number, 
   width: number, height: number,
   color: string,
-  thickness: number
+  thickness: number,
+  timestamp: number
 }
 type Circle = { 
   type: 'circle',
   x: number, y: number,
   radius: number,
   color: string,
-  thickness: number
+  thickness: number,
+  timestamp: number
 }
 
 type ErasePath = {
   type: 'erase'
   points: { x: number, y: number }[]
   thickness: number
+  timestamp: number
 }
 
 type TextObject = {
@@ -64,6 +67,7 @@ type TextObject = {
   text: string,
   color: string,
   fontSize: number
+  timestamp: number
 }
 
 type FillObject = {
@@ -84,6 +88,9 @@ export type Layer = {
   zIndex: number;
   objects: CanvasObject[];
 };
+
+// Device pixel ratio for coordinate conversion
+const dpr = window.devicePixelRatio || 1
 
 function usePlaybackController(
   canvasRef: React.RefObject<HTMLCanvasElement>,
@@ -475,9 +482,13 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
 
     const getScratch = (): CanvasRenderingContext2D => {
       const c = scratchPool.pop() || document.createElement('canvas')
-      c.width = canvas.width
+      c.width = canvas.width      // already device-px dimensions
       c.height = canvas.height
-      return c.getContext('2d')!
+      const lctx = c.getContext('2d')!
+      
+      // Reset all old transforms (no scaling needed)
+      lctx.setTransform(1, 0, 0, 1, 0, 0)
+      return lctx
     }
 
     const releaseScratch = (lctx: CanvasRenderingContext2D) => {
@@ -797,16 +808,18 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       // Just perform the flood fill immediately
       const filledPixels = floodFill(x, y, color)
       
-      // Add the fill operation to the CRDT for collaboration
-      const newFill: FillObject = { 
-        type: 'fill', 
-        x, 
-        y, 
-        color, 
-        timestamp: Date.now(),
-        filledPixels
+      // Only add the fill operation if pixels were actually filled
+      if (filledPixels.length > 0) {
+        const newFill: FillObject = { 
+          type: 'fill', 
+          x, 
+          y, 
+          color, 
+          timestamp: Date.now(),
+          filledPixels
+        }
+        addObjectToLayer(activeLayerId, newFill)
       }
-      addObjectToLayer(activeLayerId, newFill)
       return
     }
     
@@ -867,14 +880,14 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       addObjectToLayer(activeLayerId, newStroke)
     } else if (tool === 'eraser') {
       if (currentStrokePoints.length < 2) return
-      const newErase: ErasePath = { type: 'erase', points: currentStrokePoints, thickness }
+      const newErase: ErasePath = { type: 'erase', points: currentStrokePoints, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newErase)
     } else if (tool === 'rectangle') {
-      const newRect: Rectangle = { type: 'rectangle', x: startPos.x, y: startPos.y, width: endX - startPos.x, height: endY - startPos.y, color, thickness }
+      const newRect: Rectangle = { type: 'rectangle', x: startPos.x, y: startPos.y, width: endX - startPos.x, height: endY - startPos.y, color, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newRect)
     } else if (tool === 'circle') {
       const radius = Math.sqrt(Math.pow(endX - startPos.x, 2) + Math.pow(endY - startPos.y, 2))
-      const newCircle: Circle = { type: 'circle', x: startPos.x, y: startPos.y, radius, color, thickness }
+      const newCircle: Circle = { type: 'circle', x: startPos.x, y: startPos.y, radius, color, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newCircle)
     }
 
@@ -909,17 +922,90 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   }
 
   // Flood-fill algorithm implementation
-  const floodFill = (startX: number, startY: number, fillColor: string): { x: number, y: number }[] => {
-    const canvas = canvasRef.current
-    if (!canvas) return []
+  const floodFill = (cssX: number, cssY: number, fillColor: string): { x: number, y: number }[] => {
+    const main = canvasRef.current!
+    if (!main) return []
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return []
+    // Create off-screen canvas for flood fill
+    const off = document.createElement('canvas')
+    off.width = main.width
+    off.height = main.height
+    const ctx = off.getContext('2d')!
+    
+    // Do not scale the off-screen context - algorithm works with raw device pixels
 
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    // Draw the CURRENT state of the active layer into 'off'
+    const activeLayer = getActiveLayer()
+    if (!activeLayer) return []
+    
+    // Render the active layer to the off-screen canvas (scale geometry to device pixels)
+    const objects = activeLayer.get('objects') as Y.Array<CanvasObject>
+    objects.forEach((obj: CanvasObject) => {
+      // Set paint mode for this layer only
+      if (obj.type === 'erase') {
+        ctx.globalCompositeOperation = 'destination-out'
+        ctx.lineWidth = obj.thickness * dpr
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+      } else {
+        ctx.globalCompositeOperation = 'source-over'
+        if (obj.type !== 'text' && obj.type !== 'fill') {
+          ctx.strokeStyle = obj.color
+          ctx.lineWidth = obj.thickness * dpr
+          ctx.lineCap = 'round'
+          ctx.lineJoin = 'round'
+        }
+      }
+
+      // Draw the object on the off-screen canvas (convert CSS coords to device coords)
+      switch (obj.type) {
+        case 'stroke':
+        case 'erase': {
+          ctx.beginPath()
+          obj.points.forEach((p: {x: number, y: number}, i: number) => (i ? ctx.lineTo(p.x * dpr, p.y * dpr) : ctx.moveTo(p.x * dpr, p.y * dpr)))
+          ctx.stroke()
+          break
+        }
+        case 'rectangle':
+          ctx.strokeRect(obj.x * dpr, obj.y * dpr, obj.width * dpr, obj.height * dpr)
+          break
+        case 'circle':
+          ctx.beginPath()
+          ctx.arc(obj.x * dpr, obj.y * dpr, obj.radius * dpr, 0, 2 * Math.PI)
+          ctx.stroke()
+          break
+        case 'text':
+          ctx.save()
+          ctx.font = `${(obj.fontSize || 24) * dpr}px sans-serif`
+          ctx.fillStyle = obj.color
+          ctx.textBaseline = 'top'
+          ctx.fillText(obj.text, obj.x * dpr, obj.y * dpr)
+          ctx.restore()
+          break
+        case 'fill':
+          // Apply the flood fill to the stored pixels
+          ctx.save()
+          ctx.globalCompositeOperation = 'source-over'
+          ctx.fillStyle = obj.color
+          
+          // Fill each pixel that was filled in the original operation (convert to device coords)
+          obj.filledPixels.forEach(pixel => {
+            ctx.fillRect(pixel.x * dpr, pixel.y * dpr, dpr, dpr)
+          })
+          
+          ctx.restore()
+          break
+      }
+    })
+
+    // Convert CSS coordinates to device-pixel coordinates
+    const x = Math.floor(cssX * dpr)
+    const y = Math.floor(cssY * dpr)
+
+    const imageData = ctx.getImageData(0, 0, off.width, off.height)
     const data = imageData.data
-    const width = canvas.width
-    const height = canvas.height
+    const width = off.width
+    const height = off.height
 
     // Convert hex color to RGBA
     const hexToRgba = (hex: string) => {
@@ -932,7 +1018,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     const fillRgba = hexToRgba(fillColor)
     
     // Get the target color (the color we're replacing)
-    const startIndex = (startY * width + startX) * 4
+    const startIndex = (y * width + x) * 4
     const targetR = data[startIndex]
     const targetG = data[startIndex + 1]
     const targetB = data[startIndex + 2]
@@ -956,18 +1042,18 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     }
 
     // Stack-based flood fill algorithm with optimized scanning
-    const stack: [number, number][] = [[startX, startY]]
+    const stack: [number, number][] = [[x, y]]
     const filledPixels: { x: number, y: number }[] = []
     const visited = new Set<string>()
     
     while (stack.length > 0) {
-      const [x, y] = stack.pop()!
-      const key = `${x},${y}`
+      const [px, py] = stack.pop()!
+      const key = `${px},${py}`
       
-      if (x < 0 || x >= width || y < 0 || y >= height || visited.has(key)) continue
+      if (px < 0 || px >= width || py < 0 || py >= height || visited.has(key)) continue
       
       visited.add(key)
-      const index = (y * width + x) * 4
+      const index = (py * width + px) * 4
       
       // Check if this pixel matches the target color
       if (!colorsMatch(data[index], data[index + 1], data[index + 2], data[index + 3],
@@ -981,18 +1067,18 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       data[index + 2] = fillRgba[2]
       data[index + 3] = fillRgba[3]
       
-      // Record this pixel as filled
-      filledPixels.push({ x, y })
+      // Record this pixel as filled (convert back to CSS coordinates)
+      filledPixels.push({ x: px / dpr, y: py / dpr })
       
       // Add neighboring pixels to the stack
-      stack.push([x + 1, y])
-      stack.push([x - 1, y])
-      stack.push([x, y + 1])
-      stack.push([x, y - 1])
+      stack.push([px + 1, py])
+      stack.push([px - 1, py])
+      stack.push([px, py + 1])
+      stack.push([px, py - 1])
     }
     
-    // Apply the changes to the canvas
-    ctx.putImageData(imageData, 0, 0)
+    // Don't apply changes to the main canvas - let renderObjects() handle it
+    // ctx.putImageData(imageData, 0, 0) - REMOVED
     
     return filledPixels
   }
@@ -1118,6 +1204,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
                 text: textValue,
                 color,
                 fontSize: 24,
+                timestamp: Date.now()
               }
               addObjectToLayer(activeLayerId, newText)
             }
