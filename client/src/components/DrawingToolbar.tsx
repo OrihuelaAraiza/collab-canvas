@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button } from '@/components/ui/button'
-import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash, FaFillDrip } from 'react-icons/fa'
+import { FaPen, FaEraser, FaRegCircle, FaRegSquare, FaTrash, FaFillDrip, FaImage, FaMousePointer } from 'react-icons/fa'
 import { IoMdColorPalette } from 'react-icons/io'
 import { Layers3 } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
@@ -14,6 +14,7 @@ interface DrawingToolbarProps {
   setThickness: (thickness: number) => void
   onClear: () => void;
   onToggleLayers: () => void;
+  onImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
 export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
@@ -25,10 +26,20 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   setThickness,
   onClear,
   onToggleLayers,
+  onImageUpload
 }) => {
   const { theme } = useTheme();
   return (
     <div className="absolute top-1/2 left-4 -translate-y-1/2 bg-[#dbeafe] dark:bg-[#1e293b] p-2 rounded-lg shadow-lg flex flex-col gap-2 border border-[#60a5fa] dark:border-[#334155] z-10 text-[#1e293b] dark:text-white">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setTool('select')}
+        title="Select"
+        className={`transition-all hover:bg-[#bfdbfe] dark:hover:bg-[#334155] hover:scale-110 ${tool === 'select' ? 'bg-[#60a5fa] dark:bg-[#334155]' : ''}`}
+      >
+        <FaMousePointer className="h-5 w-5" />
+      </Button>
       <Button
         variant="ghost"
         size="icon"
@@ -83,6 +94,23 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
       >
         <FaFillDrip className="h-5 w-5" />
       </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        title="Add Image"
+        onClick={() => document.getElementById('image-upload')?.click()}
+        className="transition-all hover:bg-[#bfdbfe] dark:hover:bg-[#334155] hover:scale-110"
+      >
+        <FaImage className="h-5 w-5" />
+      </Button>
+
+      <input
+        id="image-upload"
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={onImageUpload}
+      />
       
       <div className="w-full h-px bg-[#60a5fa] dark:bg-[#334155] my-1"></div>
 

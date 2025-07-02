@@ -7,6 +7,7 @@ import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import { saveAs } from 'file-saver'
 import toast from 'react-hot-toast'
+import Moveable from 'react-moveable'
 import styles from './Canvas.module.css'
 import { DrawingToolbar } from './DrawingToolbar'
 import VoiceChat from './VoiceChat'
@@ -30,6 +31,7 @@ interface CanvasProps {
 
 // Define the types for our collaborative objects
 type Stroke = { 
+  id: string,
   type: 'stroke',
   points: { x: number, y: number }[],
   color: string, 
@@ -37,6 +39,7 @@ type Stroke = {
   timestamp: number
 }
 type Rectangle = { 
+  id: string,
   type: 'rectangle',
   x: number, y: number, 
   width: number, height: number,
@@ -45,6 +48,7 @@ type Rectangle = {
   timestamp: number
 }
 type Circle = { 
+  id: string,
   type: 'circle',
   x: number, y: number,
   radius: number,
@@ -54,6 +58,7 @@ type Circle = {
 }
 
 type ErasePath = {
+  id: string,
   type: 'erase'
   points: { x: number, y: number }[]
   thickness: number
@@ -61,6 +66,7 @@ type ErasePath = {
 }
 
 type TextObject = {
+  id: string,
   type: 'text',
   x: number,
   y: number,
@@ -71,6 +77,7 @@ type TextObject = {
 }
 
 type FillObject = {
+  id: string,
   type: 'fill',
   x: number,
   y: number,
@@ -79,7 +86,18 @@ type FillObject = {
   filledPixels: { x: number, y: number }[]
 }
 
-type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject | FillObject
+type ImageObject = {
+  id: string
+  type: 'image'
+  src: string        // data-url
+  x: number
+  y: number
+  width: number
+  height: number
+  timestamp: number
+}
+
+type CanvasObject = Stroke | Rectangle | Circle | ErasePath | TextObject | FillObject | ImageObject
 
 export type Layer = {
   id: string;
@@ -91,6 +109,9 @@ export type Layer = {
 
 // Device pixel ratio for coordinate conversion
 const dpr = window.devicePixelRatio || 1
+
+// Image cache for better performance
+const imageCache: Record<string, HTMLImageElement> = {}
 
 function usePlaybackController(
   canvasRef: React.RefObject<HTMLCanvasElement>,
@@ -104,7 +125,7 @@ function usePlaybackController(
   // Sort all objects by timestamp for playback (fallback to 0 if missing)
   const orderedObjects = strokes
     .filter((obj: CanvasObject) =>
-      obj.type === 'stroke' || obj.type === 'rectangle' || obj.type === 'circle' || obj.type === 'erase' || obj.type === 'text' || obj.type === 'fill')
+      obj.type === 'stroke' || obj.type === 'rectangle' || obj.type === 'circle' || obj.type === 'erase' || obj.type === 'text' || obj.type === 'fill' || obj.type === 'image')
     .sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0))
 
   useEffect(() => {
@@ -146,7 +167,7 @@ function usePlaybackController(
         ctx.lineJoin = 'round'
       } else {
         ctx.globalCompositeOperation = 'source-over'
-        if (obj.type !== 'text' && obj.type !== 'fill') {
+        if (obj.type !== 'text' && obj.type !== 'fill' && obj.type !== 'image') {
           ctx.strokeStyle = obj.color
           ctx.lineWidth  = obj.thickness
           ctx.lineCap    = 'round'
@@ -191,6 +212,7 @@ function usePlaybackController(
           
           ctx.restore()
           break
+
       }
     }
     timerRef.current = setTimeout(() => {
@@ -222,6 +244,26 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const [pendingTextInput, setPendingTextInput] = useState<{ x: number, y: number } | null>(null)
   const [layers, setLayers] = useState<Layer[]>([])
   const [showLayerPanel, setShowLayerPanel] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [shiftDown, setShiftDown] = useState(false)
+  const moveableRef = useRef<any>(null)
+
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    el.style.cursor = selectedId ? 'move' : 'default'
+  }, [selectedId])
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => e.key === 'Shift' && setShiftDown(true)
+    const up = (e: KeyboardEvent) => e.key === 'Shift' && setShiftDown(false)
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    return () => { 
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up) 
+    }
+  }, [])
 
   // Initialize CRDT with room ID
   const ydoc = useRef(new Y.Doc())
@@ -433,12 +475,16 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         // Ctrl+Y or Cmd+Y for redo (alternative)
         console.log('Keyboard redo (Y) called')
         undoManager.current.redo()
+      } else if (e.key === 'Delete' && selectedId) {
+        e.preventDefault();
+        deleteImage(selectedId);
+        setSelectedId(null);
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [selectedId])
 
   // Canvas setup useEffect
   useEffect(() => {
@@ -495,6 +541,8 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       scratchPool.push(lctx.canvas)
     }
 
+    const requestRepaint = () => ydoc.current.transact(() => {})
+
     const renderObjects = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
@@ -517,7 +565,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
             lctx.lineJoin = 'round'
           } else {
             lctx.globalCompositeOperation = 'source-over'
-            if (obj.type !== 'text' && obj.type !== 'fill') {
+            if (obj.type !== 'text' && obj.type !== 'fill' && obj.type !== 'image') {
               lctx.strokeStyle = obj.color
               lctx.lineWidth = obj.thickness
               lctx.lineCap = 'round'
@@ -563,6 +611,17 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
               
               lctx.restore()
               break
+            case 'image': {
+              const cached = imageCache[obj.id]           // simple memo
+              if (cached) {
+                lctx.drawImage(cached, obj.x, obj.y, obj.width, obj.height)
+              } else {
+                const i = new Image()
+                i.onload = () => { imageCache[obj.id] = i; requestRepaint() }
+                i.src = obj.src
+              }
+              break
+            }
           }
         })
 
@@ -803,6 +862,22 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   const handlePointerDown = (e: React.PointerEvent) => {
     const { x, y } = getCanvasPosition(e)
     
+    // Always check for image selection regardless of tool
+    const hit = layers
+      .filter(l => l.visible)
+      .reverse()                     // top-most first
+      .flatMap(l => l.objects)
+      .find(o => o.type === 'image' &&
+                 x >= o.x && x <= o.x + o.width &&
+                 y >= o.y && y <= o.y + o.height)
+    
+    if (hit) {
+      setSelectedId(hit.id)
+      // Don't return here - allow other tools to work
+    } else if (tool === 'select') {
+      setSelectedId(null)
+    }
+
     if (tool === 'paint-bucket') {
       // For paint-bucket, we don't need to track drawing state
       // Just perform the flood fill immediately
@@ -811,6 +886,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
       // Only add the fill operation if pixels were actually filled
       if (filledPixels.length > 0) {
         const newFill: FillObject = { 
+          id: `fill-${Date.now()}`,
           type: 'fill', 
           x, 
           y, 
@@ -876,18 +952,18 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     // Add final object to Yjs array
     if (tool === 'pen') {
       if (currentStrokePoints.length < 2) return
-      const newStroke: Stroke = { type: 'stroke', points: currentStrokePoints, color, thickness, timestamp: Date.now() }
+      const newStroke: Stroke = { id: `stroke-${Date.now()}`, type: 'stroke', points: currentStrokePoints, color, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newStroke)
     } else if (tool === 'eraser') {
       if (currentStrokePoints.length < 2) return
-      const newErase: ErasePath = { type: 'erase', points: currentStrokePoints, thickness, timestamp: Date.now() }
+      const newErase: ErasePath = { id: `erase-${Date.now()}`, type: 'erase', points: currentStrokePoints, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newErase)
     } else if (tool === 'rectangle') {
-      const newRect: Rectangle = { type: 'rectangle', x: startPos.x, y: startPos.y, width: endX - startPos.x, height: endY - startPos.y, color, thickness, timestamp: Date.now() }
+      const newRect: Rectangle = { id: `rect-${Date.now()}`, type: 'rectangle', x: startPos.x, y: startPos.y, width: endX - startPos.x, height: endY - startPos.y, color, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newRect)
     } else if (tool === 'circle') {
       const radius = Math.sqrt(Math.pow(endX - startPos.x, 2) + Math.pow(endY - startPos.y, 2))
-      const newCircle: Circle = { type: 'circle', x: startPos.x, y: startPos.y, radius, color, thickness, timestamp: Date.now() }
+      const newCircle: Circle = { id: `circle-${Date.now()}`, type: 'circle', x: startPos.x, y: startPos.y, radius, color, thickness, timestamp: Date.now() }
       addObjectToLayer(activeLayerId, newCircle)
     }
 
@@ -921,6 +997,38 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
     ctx.stroke()
   }
 
+  // Handle image upload
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const max = 600                                     // max dimension
+        const scale = Math.min(1, max / Math.max(img.width, img.height))
+
+        const obj: ImageObject = {
+          id: `img-${Date.now()}`,
+          type: 'image',
+          src: reader.result as string,
+          x: 100,
+          y: 100,
+          width: img.width * scale,
+          height: img.height * scale,
+          timestamp: Date.now()
+        }
+        addObjectToLayer(activeLayerId, obj)
+      }
+      img.src = reader.result as string
+    }
+    reader.readAsDataURL(file)
+    
+    // Reset the input
+    e.target.value = ''
+  }
+
   // Flood-fill algorithm implementation
   const floodFill = (cssX: number, cssY: number, fillColor: string): { x: number, y: number }[] => {
     const main = canvasRef.current!
@@ -949,7 +1057,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         ctx.lineJoin = 'round'
       } else {
         ctx.globalCompositeOperation = 'source-over'
-        if (obj.type !== 'text' && obj.type !== 'fill') {
+        if (obj.type !== 'text' && obj.type !== 'fill' && obj.type !== 'image') {
           ctx.strokeStyle = obj.color
           ctx.lineWidth = obj.thickness * dpr
           ctx.lineCap = 'round'
@@ -995,6 +1103,17 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
           
           ctx.restore()
           break
+        case 'image': {
+          const cached = imageCache[obj.id]           // simple memo
+          if (cached) {
+            ctx.drawImage(cached, obj.x * dpr, obj.y * dpr, obj.width * dpr, obj.height * dpr)
+          } else {
+            const i = new Image()
+            i.onload = () => { imageCache[obj.id] = i; ydoc.current.transact(() => {}) }
+            i.src = obj.src
+          }
+          break
+        }
       }
     })
 
@@ -1091,6 +1210,30 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
   }, [pendingTextInput])
 
   // Get all objects from all visible layers for playback
+  /** Replace the image object in-place so Yjs can record the change */
+  function patchImage(id: string, patch: Partial<ImageObject>) {
+    ydoc.current.transact(() => {
+      yLayers.current.forEach(layer => {
+        const arr = layer.get('objects') as Y.Array<CanvasObject>;
+        const i   = arr.toArray().findIndex(o => o.id === id);
+        if (i === -1) return;
+        const current = arr.get(i) as ImageObject;
+        arr.delete(i, 1);
+        arr.insert(i, [{ ...current, ...patch }]);
+      });
+    });
+  }
+
+  function deleteImage(id: string) {
+    ydoc.current.transact(() => {
+      yLayers.current.forEach(layer => {
+        const arr = layer.get('objects') as Y.Array<CanvasObject>;
+        const i   = arr.toArray().findIndex(o => o.id === id);
+        if (i !== -1) arr.delete(i, 1);
+      });
+    });
+  }
+
   const getAllObjects = (): CanvasObject[] => {
     const layers = yLayers.current.toArray()
       .sort((a, b) => a.get('zIndex') - b.get('zIndex'))
@@ -1124,6 +1267,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
             setThickness={setThickness}
             onClear={clearCanvas}
             onToggleLayers={() => setShowLayerPanel(!showLayerPanel)}
+            onImageUpload={handleImageUpload}
           />
           {socket && <VoiceChat socket={socket} roomId={roomId} />}
       {/* Overlay remote cursors */}
@@ -1149,6 +1293,85 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
         onPointerLeave={handlePointerLeave}
         style={textInput && tool === 'text' ? { pointerEvents: 'none' } : {}}
       />
+      
+      {/* Render actual <img> elements for Moveable to attach to */}
+      {layers.filter(l => l.visible).map(l =>
+        l.objects.filter(o => o.type === 'image').map(o => (
+          <img
+            id={`img-${o.id}`}
+            key={o.id}
+            src={(o as ImageObject).src}
+            style={{
+              position: 'absolute',
+              left: o.x,
+              top: o.y,
+              width: o.width,
+              height: o.height,
+              pointerEvents: 'auto',
+              cursor: selectedId === o.id ? 'move' : 'default'
+            }}
+          />
+        ))
+      )}
+      
+      {/* Moveable overlay for drag/resize */}
+      {selectedId && (() => {
+        const imgObj = layers.flatMap(l => l.objects)
+                         .find(o => o.id === selectedId) as ImageObject
+        if (!imgObj) {
+          return null
+        }
+
+        const targetElement = document.querySelector(`#img-${imgObj.id}`) as HTMLElement
+        if (!targetElement) {
+          console.log('Target element not found for:', imgObj.id)
+          return null
+        }
+
+        return (
+          <Moveable
+            ref={moveableRef}
+            target={targetElement}
+            container={wrapperRef.current!}
+            origin={false}
+            zoom={1}
+            draggable
+            resizable
+            throttleResize={0}
+            keepRatio={shiftDown}
+
+            onDrag={e => {
+              console.log('Moveable drag:', { left: e.left, top: e.top, beforeDelta: e.beforeDelta })
+              // Update DOM immediately for smooth interaction
+              targetElement.style.left = `${e.left}px`
+              targetElement.style.top = `${e.top}px`
+              
+              // Update data model
+              patchImage(imgObj.id, { x: e.left, y: e.top });
+            }}
+
+            onResize={e => {
+              console.log('Moveable resize event:', e)
+              const { width, height } = e;
+              const [dx, dy] = e.drag.beforeDelta;
+              
+              // Update DOM immediately for smooth interaction
+              targetElement.style.width = `${width}px`
+              targetElement.style.height = `${height}px`
+              targetElement.style.left = `${imgObj.x + dx}px`
+              targetElement.style.top = `${imgObj.y + dy}px`
+              
+              // Update data model
+              patchImage(imgObj.id, {
+                width,
+                height,
+                x: imgObj.x + dx,
+                y: imgObj.y + dy,
+              });
+            }}
+          />
+        )
+      })()}
       {hoverPos && tool === 'text' && !textInput && (
         <span
           style={{
@@ -1198,6 +1421,7 @@ const Canvas: React.FC<CanvasProps> = ({ roomId, onLoad }) => {
             console.log('Text input blurred')
             if (textValue.trim()) {
               const newText: TextObject = {
+                id: `text-${Date.now()}`,
                 type: 'text',
                 x: textInput.x,
                 y: textInput.y,
